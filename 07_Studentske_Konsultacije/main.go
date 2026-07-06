@@ -3,8 +3,10 @@
  *
  * -----------------------------------------------------------
  * C vs Go:
- *   pthread_cond_t cond_students[N]  ->  []sync.Cond  (slice kondicionih promenljivih)
+ *   pthread_cond_t cond_students[N]  ->  []*sync.Cond
  *   pthread_cond_init(&c, NULL)      ->  sync.NewCond(&mu)
+ *   pthread_cond_wait(&c, &mu)       ->  c.Wait()
+ *   pthread_cond_signal(&c)          ->  c.Signal()
  * -----------------------------------------------------------
  */
 
@@ -51,14 +53,20 @@ func assistantThread(wg *sync.WaitGroup) {
 
 	mu.Lock()
 	for remainingStudents > 0 {
+		// Spavaj dok nema nikoga u cekaonici
 		for count == 0 && remainingStudents > 0 {
 			condAssistant.Wait()
 		}
 
+		// Provjeri uslov izlaska
 		if remainingStudents <= 0 && count == 0 {
 			break
 		}
+		if count == 0 {
+			continue
+		}
 
+		// FIFO - uzmi prvog studenta iz reda
 		studentID := waitingRoom[head]
 		head = (head + 1) % WAITING_ROOM_SIZE
 		count--
@@ -70,6 +78,7 @@ func assistantThread(wg *sync.WaitGroup) {
 		fmt.Printf("Asistent proziva studenta %d.\n", studentID)
 		condStudents[studentID].Signal()
 
+		// Cekaj da student udje i da konsultacije zavrse
 		for !sessionFinished {
 			mu.Unlock()
 			randomSleep(60, 120)
@@ -101,6 +110,7 @@ func studentThread(id int, wg *sync.WaitGroup) {
 		fmt.Printf("Student %d seda u cekaonicu.\n", id)
 		condAssistant.Signal()
 
+		// Cekaj dok asistent ne prozove tacno tebe
 		for currentStudentInOffice != id || !assistantCalled {
 			condStudents[id].Wait()
 		}
@@ -108,11 +118,18 @@ func studentThread(id int, wg *sync.WaitGroup) {
 		fmt.Printf("Student %d ulazi na konsultacije.\n", id)
 		assistantCalled = false
 
+		// Cekaj da asistent zavrsi konsultacije
 		condStudents[id].Wait()
+
 		remainingStudents--
+		// KLJUCNO: ako je ovo bio poslednji student, probudi asistenta
+		if remainingStudents == 0 {
+			condAssistant.Signal()
+		}
 	} else {
 		fmt.Printf("Nema mesta u cekaonici. Student %d odlazi.\n", id)
 		remainingStudents--
+		// KLJUCNO: probudi asistenta da provjeri da li su svi gotovi
 		condAssistant.Signal()
 	}
 
